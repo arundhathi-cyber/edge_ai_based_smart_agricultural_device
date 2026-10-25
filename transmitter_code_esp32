@@ -1,0 +1,94 @@
+
+
+#include <SPI.h>
+#include <LoRa.h>
+#include <DHT.h>
+
+
+#define SS    5
+#define RST   14
+#define DIO0  2
+
+
+#define DHTPIN 4
+#define DHTTYPE DHT22
+#define PHPIN 34
+#define SOILPIN 25   // NEW
+
+
+DHT dht(DHTPIN, DHTTYPE);
+
+
+int counter = 0;
+
+
+void setup() {
+  Serial.begin(115200);
+
+
+  dht.begin();
+  pinMode(PHPIN, INPUT);
+  pinMode(SOILPIN, INPUT);   // NEW
+
+
+  LoRa.setPins(SS, RST, DIO0);
+
+
+  if (!LoRa.begin(433E6)) {
+    Serial.println("LoRa init failed!");
+    while (1);
+  }
+
+
+  LoRa.setSpreadingFactor(7);
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.setCodingRate4(5);
+  LoRa.setSyncWord(0x12);
+  LoRa.enableCrc();
+
+
+  Serial.println("ESP32 TX Ready");
+}
+
+
+void loop() {
+  float temp = dht.readTemperature();
+  float hum = dht.readHumidity();
+
+
+  int rawPH = analogRead(PHPIN);
+  float voltage = rawPH * (3.3 / 4095.0);
+  float phValue = 7 + ((2.5 - voltage) / 0.18);
+
+
+  int soilRaw = analogRead(SOILPIN);   // NEW
+  float soilPercent = map(soilRaw, 4095, 0, 0, 100); // adjust after calibration
+
+
+  if (isnan(temp) || isnan(hum)) {
+    Serial.println("DHT read failed!");
+    return;
+  }
+
+
+  counter++;
+
+
+  String msg = String(counter) +
+               "T:" + String(temp, 2) +
+               ",H:" + String(hum, 2) +
+               ",P:" + String(phValue, 2) +
+               ",M:" + String(soilPercent, 2);   // NEW
+
+
+  LoRa.beginPacket();
+  LoRa.print(msg);
+  LoRa.endPacket();
+
+
+  Serial.println("Sent: " + msg);
+
+
+  delay(2000);
+}
+
