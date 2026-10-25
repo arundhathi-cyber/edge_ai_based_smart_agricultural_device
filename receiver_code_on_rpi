@@ -1,0 +1,214 @@
+import time
+import spidev
+import RPi.GPIO as GPIO
+import csv
+from datetime import datetime
+import os
+import random
+from paho.mqtt import client as mqtt_client
+
+
+# ---------------- GPIO / SPI ----------------
+RST = 5
+
+
+GPIO.setwarnings(False)
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(RST, GPIO.OUT)
+
+
+spi = spidev.SpiDev()
+spi.open(0, 0)
+spi.max_speed_hz = 100000
+spi.mode = 0b00
+
+
+# ---------------- CSV ----------------
+file_name = "/home/iot/Desktop/FYP/sensors_data_log.csv"
+
+
+if not os.path.exists(file_name):
+    with open(file_name, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow([
+            "timestamp", "packet", "temp", "humidity",
+            "ph", "soil", "rssi", "N", "P", "K"
+        ])
+
+
+# ---------------- MQTT ----------------
+broker = 'broker.emqx.io'
+port = 1883
+client_id = f'subscribe-{random.randint(0, 100)}'
+
+
+# Latest NPK values (important for ML)
+N_val = None
+P_val = None
+K_val = None
+
+
+def connect_mqtt():
+    def on_connect(client, userdata, flags, rc):
+        if rc == 0:
+            print("MQTT Connected")
+        else:
+            print(f"MQTT Failed: {rc}")
+
+
+    client = mqtt_client.Client(client_id)
+    client.on_connect = on_connect
+    client.connect(broker, port)
+    return client
+
+
+def on_message(client, userdata, msg):
+    global N_val, P_val, K_val
+
+
+    value = msg.payload.decode()
+
+
+    if msg.topic.endswith("/N"):
+        N_val = value
+    elif msg.topic.endswith("/P"):
+        P_val = value
+    elif msg.topic.endswith("/K"):
+        K_val = value
+
+
+    print(f"N:{N_val} P:{P_val} K:{K_val}")
+
+
+def start_mqtt():
+    client = connect_mqtt()
+    client.subscribe("iot/Node-17/N")
+    client.subscribe("iot/Node-17/P")
+    client.subscribe("iot/Node-17/K")
+    client.on_message = on_message
+    client.loop_start()
+
+
+# ---------------- LoRa Functions ----------------
+def write_reg(addr, val):
+    spi.xfer2([addr | 0x80, val])
+
+
+def read_reg(addr):
+    return spi.xfer2([addr & 0x7F, 0])[1]
+
+
+def reset():
+    GPIO.output(RST, 0)
+    time.sleep(0.1)
+    GPIO.output(RST, 1)
+    time.sleep(0.1)
+
+
+# ---------------- INIT ----------------
+reset()
+
+
+if read_reg(0x42) != 0x12:
+    print("Hardware not found! Check wiring.")
+    exit()
+
+
+# LoRa config
+write_reg(0x01, 0x80)
+write_reg(0x06, 0x6C)
+write_reg(0x07, 0x40)
+write_reg(0x08, 0x00)
+write_reg(0x1D, 0x72)
+write_reg(0x1E, 0x74)
+write_reg(0x26, 0x04)
+write_reg(0x39, 0x12)
+write_reg(0x0C, 0x23)
+write_reg(0x33, 0x27)
+write_reg(0x12, 0xFF)
+write_reg(0x01, 0x85)
+
+
+# ---------------- START MQTT ----------------
+start_mqtt()
+
+
+print("Listening... ML-ready logging enabled")
+
+
+# ---------------- MAIN LOOP ----------------
+while True:
+    irq = read_reg(0x12)
+
+
+    if irq & 0x40:
+        if irq & 0x20:
+            print("CRC Error")
+        else:
+            length = read_reg(0x13)
+            current_addr = read_reg(0x10)
+
+
+            write_reg(0x0D, current_addr)
+            data = spi.xfer2([0x00] + [0] * length)
+            msg = bytes(data[1:]).decode(errors="ignore")
+
+
+            try:
+                parts = msg.split(',')
+
+
+                count = parts[0].split("T:")[0]
+                temp = float(parts[0].split("T:")[1])
+                hum = float(parts[1].split("H:")[1])
+                ph = float(parts[2].split("P:")[1])
+                soil = float(parts[3].split("M:")[1])
+
+
+                rssi = read_reg(0x1B) - 164
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+                # Skip until we have ALL NPK values
+                if None in (N_val, P_val, K_val):
+                    print("Waiting for full NPK data...")
+                    continue
+
+
+                # -------- PRINT --------
+                print("Packet:", count)
+                print("Temp:", temp, "Humidity:", hum)
+                print("pH:", ph, "Soil:", soil)
+                print(f"N:{N_val} P:{P_val} K:{K_val}")
+                print("-------------------")
+
+
+                # -------- CSV WRITE (ML READY) --------
+                with open(file_name, mode='a', newline='') as file:
+                    writer = csv.writer(file)
+
+
+                    writer.writerow([
+                        timestamp,
+                        int(count),
+                        temp,
+                        hum,
+                        ph,
+                        soil,
+                        rssi,
+                        float(N_val),
+                        float(P_val),
+                        float(K_val)
+                    ])
+
+
+            except Exception as e:
+                print("Parsing error:", msg)
+                print("Error:", e)
+
+
+        write_reg(0x12, 0xFF)
+        write_reg(0x01, 0x85)
+
+
+    time.sleep(0.01)
