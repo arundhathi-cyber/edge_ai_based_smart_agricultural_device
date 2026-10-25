@@ -1,0 +1,101 @@
+#include <SPI.h>
+#include <LoRa.h>
+
+
+// ===============================
+// LoRa pins - SAME AS OLD CODE
+// ===============================
+#define SS    5
+#define RST   14
+#define DIO0  2
+
+
+// ===============================
+// ESP32-CAM → WROOM UART2
+// CAM TX (GPIO13) → WROOM RX2 (GPIO16)
+// CAM RX (GPIO14) → WROOM TX2 (GPIO17)
+// ===============================
+#define RX2_PIN 16
+#define TX2_PIN 17
+
+
+void setup() {
+
+
+  // USB Serial Monitor
+  Serial.begin(115200);
+
+
+  // UART2 for ESP32-CAM
+  Serial2.begin(115200, SERIAL_8N1, RX2_PIN, TX2_PIN);
+
+
+  // ===============================
+  // LoRa initialization
+  // ===============================
+  LoRa.setPins(SS, RST, DIO0);
+
+
+  if (!LoRa.begin(433E6)) {
+    Serial.println("LoRa init failed!");
+    while (1);
+  }
+
+
+  // SAME SETTINGS AS OLD CODE
+  LoRa.setSpreadingFactor(7);
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.setCodingRate4(5);
+  LoRa.setSyncWord(0x12);
+  LoRa.enableCrc();
+
+
+  Serial.println("================================");
+  Serial.println("ESP32-WROOM TX READY");
+  Serial.println("Waiting for ESP32-CAM result...");
+  Serial.println("================================");
+}
+
+
+void loop() {
+
+
+  // Check if ESP32-CAM has sent a result
+  if (Serial2.available()) {
+
+
+    String prediction = Serial2.readStringUntil('\n');
+
+
+    prediction.trim();
+
+
+    if (prediction.length() > 0) {
+
+
+      // Show what came from CAM
+      Serial.print("CAM RESULT: ");
+      Serial.println(prediction);
+
+
+      // ===============================
+      // SEND RESULT THROUGH LoRa
+      // ===============================
+
+
+      LoRa.beginPacket();
+      LoRa.print(prediction);
+      LoRa.endPacket();
+
+
+      Serial.print("LORA SENT: ");
+      Serial.println(prediction);
+    }
+  }
+}
+
+
+
+
+
+
