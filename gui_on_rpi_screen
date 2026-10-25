@@ -1,0 +1,692 @@
+"""
+AgriEdge Crop Prediction Dashboard
+Fullscreen 800×480 Tkinter UI — Bioluminescent Forest-Tech Edition
+Reads live sensor CSV → predicts crop via ML model
+"""
+
+
+import tkinter as tk
+from tkinter import font as tkfont
+import joblib
+import pandas as pd
+import numpy as np
+import math, time, os
+
+
+# ──────────────────────────────────────────────
+# CONFIG
+# ──────────────────────────────────────────────
+CSV_PATH       = "/home/iot/Desktop/FYP/sensors_data_log.csv"
+MODEL_PATH     = "/home/iot/Desktop/FYP/crop_model_full.pkl"
+CROP_CSV       = "/home/iot/Desktop/FYP/Crop_recommendation.csv"
+RAINFALL_FIXED = 200
+REFRESH_MS     = 3000
+
+
+# Short display names for crops (no emojis — use coloured dot instead)
+CROP_DISPLAY = {
+    "rice":        "RICE",
+    "maize":       "MAIZE",
+    "chickpea":    "CHICKPEA",
+    "kidneybeans": "KIDNEY BEANS",
+    "pigeonpeas":  "PIGEON PEAS",
+    "mothbeans":   "MOTH BEANS",
+    "mungbean":    "MUNG BEAN",
+    "blackgram":   "BLACK GRAM",
+    "lentil":      "LENTIL",
+    "pomegranate": "POMEGRANATE",
+    "banana":      "BANANA",
+    "mango":       "MANGO",
+    "grapes":      "GRAPES",
+    "watermelon":  "WATERMELON",
+    "muskmelon":   "MUSKMELON",
+    "apple":       "APPLE",
+    "orange":      "ORANGE",
+    "papaya":      "PAPAYA",
+    "coconut":     "COCONUT",
+    "cotton":      "COTTON",
+    "jute":        "JUTE",
+    "coffee":      "COFFEE",
+}
+
+
+# Crop category colour tags (for the coloured dot beside each crop name)
+CROP_COLOR_TAG = {
+    "rice":        "#2eec78", "maize":       "#ffc94a",
+    "chickpea":    "#ff9f43", "kidneybeans": "#ff6b7a",
+    "pigeonpeas":  "#00d4a0", "mothbeans":   "#40e0ff",
+    "mungbean":    "#2eec78", "blackgram":   "#b388ff",
+    "lentil":      "#ffc94a", "pomegranate": "#ff6b7a",
+    "banana":      "#ffc94a", "mango":       "#ff9f43",
+    "grapes":      "#b388ff", "watermelon":  "#ff6b7a",
+    "muskmelon":   "#ffc94a", "apple":       "#ff6b7a",
+    "orange":      "#ff9f43", "papaya":      "#ff9f43",
+    "coconut":     "#00d4a0", "cotton":      "#40e0ff",
+    "jute":        "#2eec78", "coffee":      "#c8a96e",
+}
+
+
+# ──────────────────────────────────────────────
+# PALETTE
+# ──────────────────────────────────────────────
+C = {
+    "bg":          "#060e0a",
+    "bg2":         "#0a1a10",
+    "panel":       "#0c1f14",
+    "card":        "#0e2318",
+    "card2":       "#091910",
+    "border":      "#1a4028",
+    "border_hi":   "#2a7a4a",
+    "glow":        "#00ff88",
+    "accent1":     "#2eec78",
+    "accent2":     "#00d4a0",
+    "accent3":     "#ffc94a",
+    "accent4":     "#ff6b7a",
+    "accent5":     "#40e0ff",
+    "accent6":     "#b388ff",
+    "accent7":     "#ff9f43",
+    "text":        "#e8ffe8",
+    "subtext":     "#8ecfa8",
+    "dim":         "#1e3828",
+    "dim2":        "#152a1e",
+    "white":       "#ffffff",
+    "bar_bg":      "#0f2518",
+    "conf_ring":   "#2eec78",
+    "s_temp":      "#ffc94a",
+    "s_hum":       "#40e0ff",
+    "s_ph":        "#00d4a0",
+    "s_N":         "#2eec78",
+    "s_P":         "#b388ff",
+    "s_K":         "#ff9f43",
+    "s_moisture":  "#7ec8e3",
+}
+
+
+# ──────────────────────────────────────────────
+# WINDOW
+# ──────────────────────────────────────────────
+W, H = 800, 480
+root = tk.Tk()
+root.title("CROP PREDICTION DASHBOARD")
+root.attributes("-fullscreen", True)
+root.configure(bg=C["bg"])
+root.geometry(f"{W}x{H}")
+
+
+# ──────────────────────────────────────────────
+# FONTS
+# ──────────────────────────────────────────────
+def F(size, weight="normal", family="Helvetica"):
+    return tkfont.Font(family=family, size=size, weight=weight)
+
+
+fHEAD  = F(12, "bold")
+fMED   = F(14, "bold")
+fSM    = F(9,  "bold")
+fXS    = F(8)
+fXXS   = F(7,  "bold")
+fCROP  = F(16, "bold")
+fSUIT  = F(13, "bold")
+
+
+# ──────────────────────────────────────────────
+# LOAD MODEL & IDEAL CONDITIONS
+# ──────────────────────────────────────────────
+try:
+    model = joblib.load(MODEL_PATH)
+    df_ref = pd.read_csv(CROP_CSV)
+    df_ref.columns = df_ref.columns.str.strip().str.lower()
+    crop_ideal = df_ref.groupby("label").mean(numeric_only=True)
+except Exception as e:
+    print(f"[WARN] Model/CSV load error: {e}")
+    model = None
+    crop_ideal = None
+
+
+# ──────────────────────────────────────────────
+# CANVAS
+# ──────────────────────────────────────────────
+cv = tk.Canvas(root, width=W, height=H, bg=C["bg"],
+               highlightthickness=0)
+cv.pack(fill="both", expand=True)
+
+
+# ──────────────────────────────────────────────
+# LAYOUT
+# ──────────────────────────────────────────────
+TOP_H    = 34
+SENSOR_Y = TOP_H + 4
+SENSOR_H = 110
+GAP      = 5
+BOTTOM_Y = SENSOR_Y + SENSOR_H + GAP
+BOTTOM_H = H - BOTTOM_Y - 5
+LEFT_W   = 348
+RIGHT_X  = LEFT_W + GAP + 5
+RIGHT_W  = W - RIGHT_X - 5
+
+
+# ──────────────────────────────────────────────
+# SENSOR DEFS — moisture added as 7th (display only, not used in ML)
+# ──────────────────────────────────────────────
+sensor_defs = [
+    ("temp",     "TEMPERATURE", "°C",       10, 50,  C["s_temp"]),
+    ("hum",      "HUMIDITY",    "% RH",     0,  100, C["s_hum"]),
+    ("ph",       "pH",          "pH Scale", 0,  14,  C["s_ph"]),
+    ("N",        "NITROGEN",    "mg/kg",    0,  140, C["s_N"]),
+    ("P",        "PHOSPHORUS",  "mg/kg",    0,  145, C["s_P"]),
+    ("K",        "POTASSIUM",   "mg/kg",    0,  205, C["s_K"]),
+    ("moisture", "MOISTURE",    "% Vol",    0,  100, C["s_moisture"]),
+]
+
+
+spark_history = {k: [] for k, *_ in sensor_defs}
+
+
+# ──────────────────────────────────────────────
+# DRAWING HELPERS
+# ──────────────────────────────────────────────
+
+
+def hex_points(cx, cy, r, offset_angle=0):
+    pts = []
+    for i in range(6):
+        a = math.radians(60 * i + offset_angle)
+        pts.extend([cx + r * math.cos(a), cy + r * math.sin(a)])
+    return pts
+
+
+def draw_hexagon(cx, cy, r, fill="", outline="#1a4028", width=1,
+                 tag="static", offset=30):
+    pts = hex_points(cx, cy, r, offset)
+    cv.create_polygon(pts, fill=fill, outline=outline,
+                      width=width, tags=tag)
+
+
+def draw_rounded_rect(x0, y0, x1, y1, r=8, fill=C["card"],
+                      outline=C["border"], width=1, tag="static"):
+    cv.create_rectangle(x0+r, y0, x1-r, y1,   fill=fill, outline="", tags=tag)
+    cv.create_rectangle(x0, y0+r, x1, y1-r,   fill=fill, outline="", tags=tag)
+    for ox, oy in [(x0+r,y0+r),(x1-r,y0+r),(x0+r,y1-r),(x1-r,y1-r)]:
+        cv.create_oval(ox-r,oy-r,ox+r,oy+r,   fill=fill, outline="", tags=tag)
+    if outline and width:
+        cv.create_line(x0+r,y0, x1-r,y0,      fill=outline, width=width, tags=tag)
+        cv.create_line(x0+r,y1, x1-r,y1,      fill=outline, width=width, tags=tag)
+        cv.create_line(x0,y0+r, x0,y1-r,      fill=outline, width=width, tags=tag)
+        cv.create_line(x1,y0+r, x1,y1-r,      fill=outline, width=width, tags=tag)
+        cv.create_arc(x0,    y0,    x0+2*r,y0+2*r, start=90,  extent=90,
+                      style="arc", outline=outline, width=width, tags=tag)
+        cv.create_arc(x1-2*r,y0,    x1,    y0+2*r, start=0,   extent=90,
+                      style="arc", outline=outline, width=width, tags=tag)
+        cv.create_arc(x0,    y1-2*r,x0+2*r,y1,     start=180, extent=90,
+                      style="arc", outline=outline, width=width, tags=tag)
+        cv.create_arc(x1-2*r,y1-2*r,x1,    y1,     start=270, extent=90,
+                      style="arc", outline=outline, width=width, tags=tag)
+
+
+def draw_arc_gauge(cx, cy, r, pct, color, bg_color="#1e3828",
+                   width=7, tag=""):
+    kw = {"tags": tag} if tag else {}
+    cv.create_arc(cx-r, cy-r, cx+r, cy+r,
+                  start=220, extent=-260,
+                  style="arc", outline=bg_color, width=width, **kw)
+    extent = -260 * min(max(pct, 0), 1)
+    if abs(extent) > 1:
+        cv.create_arc(cx-r, cy-r, cx+r, cy+r,
+                      start=220, extent=extent,
+                      style="arc", outline=color, width=width, **kw)
+        cv.create_arc(cx-r+2, cy-r+2, cx+r-2, cy+r-2,
+                      start=220, extent=extent,
+                      style="arc", outline=color,
+                      width=max(1, width-5), **kw)
+
+
+def draw_sparkline(x0, y0, w, h, values, color, tag=""):
+    if len(values) < 2:
+        return
+    mn, mx = min(values), max(values)
+    rng = (mx - mn) or 1
+    pts = []
+    for i, v in enumerate(values):
+        px = x0 + i * w / (len(values)-1)
+        py = y0 + h - (v - mn) / rng * h
+        pts.extend([px, py])
+    kw = {"tags": tag} if tag else {}
+    shadow = [pts[j] if j % 2 == 0 else pts[j]+1
+              for j in range(len(pts))]
+    cv.create_line(*shadow, fill=C["dim"], width=2, smooth=True, **kw)
+    cv.create_line(*pts,    fill=color,    width=2, smooth=True, **kw)
+
+
+def dot_grid(x0, y0, x1, y1, step=22, color="#0e2016", tag="static"):
+    for x in range(x0, x1, step):
+        for y in range(y0, y1, step):
+            cv.create_oval(x-1,y-1,x+1,y+1,
+                           fill=color, outline="", tags=tag)
+
+
+# ──────────────────────────────────────────────
+# STATIC BACKGROUND + FRAME
+# ──────────────────────────────────────────────
+def draw_static():
+    cv.create_rectangle(0, 0, W, H, fill=C["bg"], outline="")
+    dot_grid(0, 0, W, H, step=22, color="#0e2016")
+
+
+    # bg hexagons
+    for cx, cy, r, col in [
+        (730,420,80,"#0a1c10"), (760,60,55,"#091810"),
+        (30,400,60,"#091810"),  (400,240,120,"#07120d"),
+        (160,50,40,"#091810"),
+    ]:
+        draw_hexagon(cx, cy, r, fill=col, outline="#0e2016", width=1)
+
+
+    # diagonal lines top-right
+    for i in range(0, 120, 14):
+        cv.create_line(W-120+i, 0, W, 120-i,
+                       fill="#0d1e14", width=1, tags="static")
+
+
+    # glow blob bottom-left
+    for rr, col in [(90,"#081510"),(60,"#091810"),(35,"#0b1e14")]:
+        cv.create_oval(0, H-rr*2, rr*2, H, fill=col, outline="", tags="static")
+
+
+    # ── HEADER ──
+    cv.create_rectangle(0, 0, W, TOP_H, fill=C["panel"], outline="")
+    cv.create_rectangle(0, 0, W, 3, fill=C["accent1"], outline="")
+    cv.create_line(0, TOP_H, W, TOP_H, fill=C["border_hi"], width=1)
+
+
+    cv.create_text(W//2, TOP_H//2,
+                   text="CROP PREDICTION DASHBOARD",
+                   anchor="center", fill=C["white"], font=fHEAD, tags="static")
+
+
+    cv.create_oval(W-58, TOP_H//2-5, W-48, TOP_H//2+5,
+                   fill=C["accent1"], outline=C["glow"],
+                   width=1, tags="live_dot")
+    cv.create_text(W-43, TOP_H//2, text="LIVE",
+                   anchor="w", fill=C["accent1"],
+                   font=F(9,"bold"), tags="static")
+
+
+    # ── BOTTOM LEFT panel ──
+    draw_rounded_rect(4, BOTTOM_Y, 4+LEFT_W, BOTTOM_Y+BOTTOM_H,
+                      r=10, fill=C["card2"], outline=C["border_hi"], width=1)
+    cv.create_polygon(4, BOTTOM_Y, 4+28, BOTTOM_Y, 4, BOTTOM_Y+28,
+                      fill=C["accent1"], outline="", tags="static")
+    cv.create_text(40, BOTTOM_Y+10, text="REAL-TIME CROP ANALYSIS",
+                   anchor="w", fill=C["accent2"],
+                   font=F(8,"bold"), tags="static")
+
+
+    # ── BOTTOM RIGHT panel ──
+    draw_rounded_rect(RIGHT_X, BOTTOM_Y, RIGHT_X+RIGHT_W, BOTTOM_Y+BOTTOM_H,
+                      r=10, fill=C["card2"], outline=C["border_hi"], width=1)
+    cv.create_polygon(RIGHT_X, BOTTOM_Y, RIGHT_X+28, BOTTOM_Y,
+                      RIGHT_X, BOTTOM_Y+28,
+                      fill=C["accent3"], outline="", tags="static")
+    cv.create_text(RIGHT_X+40, BOTTOM_Y+10,
+                   text="TOP CROP PROBABILITY RANKING",
+                   anchor="w", fill=C["accent3"],
+                   font=F(8,"bold"), tags="static")
+
+
+draw_static()
+
+
+# ──────────────────────────────────────────────
+# SENSOR CARDS
+# ──────────────────────────────────────────────
+def draw_sensor_cards(vals):
+    total_w = W - 10
+    cw = total_w // 7          # 7 cards
+    for i, (key, label, unit, mn, mx, color) in enumerate(sensor_defs):
+        x0  = 5 + i * cw
+        y0  = SENSOR_Y
+        x1  = x0 + cw - GAP
+        y1  = y0 + SENSOR_H
+        tag = f"sc_{key}"
+        cv.delete(tag)
+
+
+        draw_rounded_rect(x0, y0, x1, y1, r=7,
+                          fill=C["card"], outline=color, width=1, tag=tag)
+        # top colour bar
+        cv.create_rectangle(x0+7, y0, x1-7, y0+3,
+                             fill=color, outline="", tags=tag)
+
+
+        mid_x = x0 + (cw - GAP) // 2
+        cv.create_oval(mid_x-30, y0+18, mid_x+30, y0+86,
+                       fill=C["dim2"], outline="", tags=tag)
+
+
+        # label
+        cv.create_text(mid_x, y0+11, text=label,
+                       anchor="center", fill=color,
+                       font=F(7,"bold"), tags=tag)
+
+
+        v   = vals.get(key, 0)
+        pct = (v - mn) / (mx - mn)
+
+
+        cy_g = y0 + 58
+        draw_arc_gauge(mid_x, cy_g, 27, pct, color,
+                       bg_color=C["dim"], width=6, tag=tag)
+
+
+        # value
+        cv.create_text(mid_x, cy_g-6, text=f"{v:.1f}",
+                       anchor="center", fill=C["white"], font=fMED, tags=tag)
+        # unit
+        cv.create_text(mid_x, cy_g+13, text=unit,
+                       anchor="center", fill=C["subtext"],
+                       font=F(7), tags=tag)
+
+
+        # sparkline
+        hist = spark_history[key][-20:]
+        if len(hist) >= 2:
+            draw_sparkline(x0+5, y1-20, cw-GAP-10, 16,
+                           hist, color, tag=tag)
+        for tick in [0.25, 0.5, 0.75]:
+            tx = x0 + 5 + int((cw-GAP-10) * tick)
+            cv.create_line(tx, y1-22, tx, y1-19,
+                           fill=C["dim"], width=1, tags=tag)
+
+
+# ──────────────────────────────────────────────
+# LEFT PANEL — prediction
+# ──────────────────────────────────────────────
+def draw_prediction(crop_name, suitability_pct, sensor_vals):
+    tag = "pred"
+    cv.delete(tag)
+
+
+    lx = 4
+    ly = BOTTOM_Y + 22
+    lw = LEFT_W
+
+
+    crop_key  = crop_name.lower()
+    disp_name = CROP_DISPLAY.get(crop_key, crop_name.upper())
+    dot_col   = CROP_COLOR_TAG.get(crop_key, C["accent1"])
+
+
+    # ── Crop name — no shapes/hex/symbols around it ──
+    nx = lx + 20
+    cv.create_text(nx, ly+14, text="BEST PREDICTED CROP",
+                   anchor="w", fill=C["subtext"],
+                   font=F(7,"bold"), tags=tag)
+    cv.create_text(nx, ly+40, text=disp_name,
+                   anchor="w", fill=C["white"], font=fCROP, tags=tag)
+    nw = min(len(disp_name)*9, 200)
+    cv.create_line(nx, ly+52, nx+nw, ly+52,
+                   fill=dot_col, width=2, tags=tag)
+    cv.create_line(nx, ly+54, nx+int(nw*0.55), ly+54,
+                   fill=C["accent2"], width=1, tags=tag)
+
+
+    # ── Suitability ring ───────────────────────
+    ccx, ccy, cr = lx+lw-62, ly+50, 38
+
+
+    cv.create_oval(ccx-cr-4, ccy-cr-4, ccx+cr+4, ccy+cr+4,
+                   fill="", outline=C["dim"], width=1, tags=tag)
+    cv.create_oval(ccx-cr-2, ccy-cr-2, ccx+cr+2, ccy+cr+2,
+                   fill=C["dim2"], outline="", tags=tag)
+
+
+    draw_arc_gauge(ccx, ccy, cr, suitability_pct/100,
+                   C["conf_ring"], C["dim"], width=7, tag=tag)
+
+
+    cv.create_text(ccx, ccy-10, text=f"{suitability_pct:.1f}%",
+                   anchor="center", fill=C["white"],
+                   font=F(13,"bold"), tags=tag)
+    cv.create_text(ccx, ccy+8,  text="SUITABILITY",
+                   anchor="center", fill=C["accent2"],
+                   font=F(7,"bold"), tags=tag)
+
+
+    for hangle in [45, 135, 225, 315]:
+        hrad = math.radians(hangle)
+        hpx  = ccx + (cr+11)*math.cos(hrad)
+        hpy  = ccy + (cr+11)*math.sin(hrad)
+        draw_hexagon(int(hpx), int(hpy), 4, fill="",
+                     outline=C["border_hi"], width=1, tag=tag, offset=0)
+
+
+    # ── Divider ────────────────────────────────
+    div_y = ly + 100
+    cv.create_line(lx+10, div_y, lx+lw-10, div_y,
+                   fill=C["border_hi"], width=1, tags=tag)
+    cv.create_oval(lw//2-4, div_y-4, lw//2+4, div_y+4,
+                   fill=C["accent2"], outline="", tags=tag)
+
+
+    cv.create_text(lx+12, div_y+12, text="KEY OPTIMAL CONDITIONS",
+                   anchor="w", fill=C["subtext"],
+                   font=F(7,"bold"), tags=tag)
+
+
+    # ── Conditions grid ────────────────────────
+    if crop_ideal is not None and crop_key in crop_ideal.index:
+        ideal = crop_ideal.loc[crop_key]
+        items = [
+            ("TEMP",     f"{ideal.get('temperature',0):.0f} °C",         C["s_temp"]),
+            ("pH",       f"{ideal.get('ph',0):.1f}",                     C["s_ph"]),
+            ("HUMIDITY", f"{ideal.get('humidity',0):.0f} %",             C["s_hum"]),
+            ("N",        f"{ideal.get('n',ideal.get('N',0)):.0f} mg/kg", C["s_N"]),
+            ("P",        f"{ideal.get('p',ideal.get('P',0)):.0f} mg/kg", C["s_P"]),
+            ("K",        f"{ideal.get('k',ideal.get('K',0)):.0f} mg/kg", C["s_K"]),
+        ]
+        row_y = div_y + 26
+        col_w = lw // 3
+        for idx, (lbl, val, col) in enumerate(items):
+            c  = idx % 3
+            r  = idx // 3
+            tx = lx + 10 + c * col_w
+            ty = row_y + r * 26
+            cv.create_rectangle(tx-2, ty-9, tx+col_w-8, ty+10,
+                                 fill=C["dim2"], outline=C["border"],
+                                 width=1, tags=tag)
+            cv.create_rectangle(tx-2, ty-9, tx+3, ty+10,
+                                 fill=col, outline="", tags=tag)
+            cv.create_text(tx+7, ty-2, text=lbl,
+                           anchor="w", fill=col,
+                           font=F(6,"bold"), tags=tag)
+            cv.create_text(tx+7, ty+6, text=val,
+                           anchor="w", fill=C["white"],
+                           font=F(6), tags=tag)
+
+
+    # ── Timestamp ──────────────────────────────
+    ts = time.strftime("%d %b %Y   %H:%M:%S")
+    cv.create_text(lx+12, BOTTOM_Y+BOTTOM_H-6,
+                   text=f"Last update:  {ts}",
+                   anchor="w", fill=C["subtext"],
+                   font=F(7), tags=tag)
+
+
+# ──────────────────────────────────────────────
+# RIGHT PANEL — top crops bar chart
+# ──────────────────────────────────────────────
+def draw_top_crops(proba_dict):
+    tag = "crops"
+    cv.delete(tag)
+
+
+    rx = RIGHT_X + 10
+    ry = BOTTOM_Y + 24
+    rw = RIGHT_W - 18
+    rh = BOTTOM_H - 30
+
+
+    top = sorted(proba_dict.items(), key=lambda x: x[1], reverse=True)[:8]
+    if not top:
+        return
+
+
+    row_h  = rh // len(top)
+    max_p  = top[0][1] if top[0][1] > 0 else 1
+
+
+    bar_colors = [
+        C["accent1"], C["accent2"], C["accent5"], C["accent3"],
+        C["accent6"], "#f472b6", C["accent7"], C["accent4"],
+    ]
+
+
+    for i, (crop, prob) in enumerate(top):
+        y      = ry + i * row_h
+        bar_y  = y + row_h//2 - 7
+        bar_h  = 13
+        col    = bar_colors[i % len(bar_colors)]
+        dot_c  = CROP_COLOR_TAG.get(crop.lower(), col)
+        disp   = CROP_DISPLAY.get(crop.lower(), crop.upper())
+
+
+        bx0    = rx + 130
+        bx1    = rx + rw - 38
+        bar_w  = int((bx1-bx0) * (prob/max_p))
+
+
+        # rank badge
+        cv.create_oval(rx+2, bar_y+1, rx+20, bar_y+bar_h-1,
+                       fill=C["dim2"], outline=col, width=1, tags=tag)
+        cv.create_text(rx+11, bar_y+bar_h//2, text=str(i+1),
+                       anchor="center", fill=col,
+                       font=F(7,"bold"), tags=tag)
+
+
+        # coloured dot before crop name
+        cv.create_oval(rx+24, bar_y+bar_h//2-4,
+                       rx+32, bar_y+bar_h//2+4,
+                       fill=dot_c, outline="", tags=tag)
+
+
+        # crop name
+        cv.create_text(rx+36, bar_y+bar_h//2, text=disp,
+                       anchor="w", fill=C["white"],
+                       font=F(8,"bold"), tags=tag)
+
+
+        # bar bg
+        cv.create_rectangle(bx0, bar_y, bx1, bar_y+bar_h,
+                             fill=C["bar_bg"], outline=C["border"],
+                             width=1, tags=tag)
+        # bar fill + glow tip
+        if bar_w > 2:
+            fx1 = bx0 + min(bar_w, bx1-bx0)
+            cv.create_rectangle(bx0, bar_y, fx1, bar_y+bar_h,
+                                 fill=col, outline="", tags=tag)
+            cv.create_rectangle(fx1-3, bar_y+1, fx1, bar_y+bar_h-1,
+                                 fill=C["white"], outline="", tags=tag)
+
+
+        # percentage
+        cv.create_text(bx1+4, bar_y+bar_h//2,
+                       text=f"{prob*100:.1f}%",
+                       anchor="w", fill=C["white"],
+                       font=F(7,"bold"), tags=tag)
+
+
+        # gold star for #1
+        if i == 0:
+            cv.create_text(rx+rw-2, bar_y, text="★",
+                           anchor="e", fill=C["accent3"],
+                           font=F(10,"bold"), tags=tag)
+
+
+# ──────────────────────────────────────────────
+# READ SENSOR DATA
+# ──────────────────────────────────────────────
+def read_sensor():
+    defaults = {"temp":28.5,"hum":65,"ph":6.5,"N":30,"P":20,"K":40,"moisture":45.0}
+    try:
+        df = pd.read_csv(CSV_PATH)
+        df.columns = df.columns.str.strip().str.lower()
+        row = df.iloc[-1]
+        def get_val(col_name, default):
+            try:
+                return float(row[col_name])
+            except Exception:
+                return default
+        return {
+            "temp":     get_val("temp",     defaults["temp"]),
+            "hum":      get_val("hum",      defaults["hum"]),
+            "ph":       get_val("ph",       defaults["ph"]),
+            "N":        get_val("n",        defaults["N"]),
+            "P":        get_val("p",        defaults["P"]),
+            "K":        get_val("k",        defaults["K"]),
+            "moisture": get_val("soil", defaults["moisture"]),
+        }
+    except Exception:
+        return defaults
+
+
+# ──────────────────────────────────────────────
+# PREDICT  (moisture not passed to model)
+# ──────────────────────────────────────────────
+def predict(vals):
+    if model is None:
+        return ("rice", 94.5, {"rice":0.945,"maize":0.82,"chickpea":0.6,
+                                "lentil":0.4,"mango":0.3,"banana":0.2,
+                                "coffee":0.15,"cotton":0.1})
+    try:
+        features = pd.DataFrame([[
+            vals["N"], vals["P"], vals["K"],
+            vals["temp"], vals["hum"], vals["ph"], RAINFALL_FIXED
+        ]], columns=["N","P","K","temperature","humidity","ph","rainfall"])
+        proba      = model.predict_proba(features)[0]
+        classes    = model.classes_
+        proba_dict = {c: float(p) for c, p in zip(classes, proba)}
+        best       = max(proba_dict, key=proba_dict.get)
+        suitability = proba_dict[best] * 100
+        return best, suitability, proba_dict
+    except Exception as e:
+        print(f"[WARN] predict error: {e}")
+        return ("rice", 0.0, {})
+
+
+# ──────────────────────────────────────────────
+# LIVE DOT BLINK
+# ──────────────────────────────────────────────
+_blink = [True]
+def blink_dot():
+    color = C["accent1"] if _blink[0] else C["dim"]
+    cv.itemconfig("live_dot", fill=color)
+    _blink[0] = not _blink[0]
+    root.after(600, blink_dot)
+
+
+blink_dot()
+
+
+# ──────────────────────────────────────────────
+# MAIN REFRESH
+# ──────────────────────────────────────────────
+def refresh():
+    vals = read_sensor()
+    for k in spark_history:
+        spark_history[k].append(vals.get(k, 0))
+        if len(spark_history[k]) > 40:
+            spark_history[k].pop(0)
+    draw_sensor_cards(vals)
+    crop, suitability, proba_dict = predict(vals)
+    draw_prediction(crop, suitability, vals)
+    draw_top_crops(proba_dict)
+    root.after(REFRESH_MS, refresh)
+
+
+root.bind("<Escape>", lambda e: root.destroy())
+root.bind("q",        lambda e: root.destroy())
+
+
+refresh()
+root.mainloop()
+
